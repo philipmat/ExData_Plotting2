@@ -4,6 +4,9 @@ author: "Philip Mateescu"
 date: "September 22, 2015"
 output: html_document
 ---
+```{r}
+options(warnings=-1)
+```
 
 # Data
 
@@ -32,7 +35,10 @@ You can read each of the two files using the readRDS() function in R.
 
 ```{r}
 # might take a while
-# NEI <- readRDS('data/summarySCC_PM25.rds'); SCC <- readRDS('data/Source_Classification_Code.rds')
+if (!exists('NEI')) {
+    NEI <- readRDS('data/summarySCC_PM25.rds')
+    SCC <- readRDS('data/Source_Classification_Code.rds')
+}
 ```
 
 # Assignment
@@ -52,7 +58,7 @@ Using the **base** plotting system, make a plot showing the *total* PM2.5 emissi
 pm25.agg <- aggregate(Emissions ~ year, data=NEI, FUN=sum)
 plot(Emissions ~ year, data = pm25.agg, pch=2, col=topo.colors(8))
 # add a regression line
-pm25.agg.regr <- lm(x ~ year, pm25.agg)
+pm25.agg.regr <- lm(Emissions ~ year, pm25.agg)
 # width=1, dotted, green
 abline(pm25.agg.regr, lwd=1, lty=2, col='green')
 ```
@@ -62,12 +68,14 @@ abline(pm25.agg.regr, lwd=1, lty=2, col='green')
 Use the base plotting system to make a plot answering this question.
 
 ```{r}
-pm25.orioles <- aggregate(Emission ~ year, data=NEI, FUN=sum, subset = NEI$fips == '24510')
-plot(Emissions ~ year, data=pm25.orioles)
+# extract the Baltimore subset. we will use it in later questions
+pm25.balt <- subset(NEI, NEI$fips == '24510')
+pm25.balt.agg <- aggregate(Emissions ~ year, data=pm25.balt, FUN=sum)
+plot(Emissions ~ year, data=pm25.balt.agg)
 # regression line
-pm25.ori.regr <- lm(x ~ year, pm25.orioles)
+pm25.balt.regr <- lm(Emissions ~ year, pm25.balt.agg)
 # width=1, dotted, green
-abline(pm25.ori.regr, lwd=1, lty=2, col='green')
+abline(pm25.balt.regr, lwd=1, lty=2, col='green')
 ```
 
 
@@ -75,19 +83,72 @@ abline(pm25.ori.regr, lwd=1, lty=2, col='green')
 
 Use the ggplot2 plotting system to make a plot answer this question. 
 ```{r}
+# using dplyr for easier manipulation
 library(dplyr)
-dt.balt <- tbl_df(pm25.orioles)
+dt.balt <- tbl_df(pm25.balt)
+
+# grouping the dataset by type and by year and adding all Emissions in an *emissions* column
 dt.balt.bytype <- dt.balt %>% group_by(type, year) %>% summarize(emissions=sum(Emissions)) %>% print
 
 library(ggplot2)
-qplot(year, emissions, data=dt.balt.sum, color=type, geom = c('point', 'smooth'))
+plot3 <- qplot(year, emissions, data=dt.balt.bytype, color=type, geom = c('point', 'smooth'))
+suppressWarnings(print(plot3))
 ```
-
 
 ### 4. Across the United States, how have emissions from coal combustion-related sources changed from 1999–2008?
 
+The sectors are in the form of "Fuel Comb - Electric Generation - Coal": **coal** seems 
+to be spelled-out, while **combustion** is shortened to **comb**..
+
+```{r}
+# searching for sectors containing both "coal" and "comb" aka combustion
+# and accounting only for those that have both
+coco <- intersect(grep('Coal', SCC$EI.Sector), grep('Comb', SCC$EI.Sector))
+# SCC contains the codes in the NEI$SCC column
+coco.codes <- SCC[coco, 'SCC']
+# now lets use dplyr to summarize those sources by year
+coco.sum <- NEI %>% filter(SCC %in% coco.codes) %>% group_by(year) %>% summarize(emissions=sum(Emissions))
+# to be able to compare with the plot in question 1, we'll use the same plot call
+plot(emissions ~ year, data=coco.sum, col=topo.colors(8))
+abline(lm(emissions ~ year, data=coco.sum), lwd=1, lty=2, col='green')
+```
+
 ### 5. How have emissions from motor vehicle sources changed from 1999–2008 in Baltimore City?
+
+The codebook at http://www3.epa.gov/ttn/chief/net/2008neiv3/2008_neiv3_tsd_draft.pdf, page 112,
+section **4.6 On-road - all Diesel and Gasoline Vehicles**, lists the following EIS sectors:
+
+* Mobile – On-road – Diesel Heavy Duty Vehicles
+* Mobile – On-road – Diesel Light Duty Vehicles
+* Mobile – On-road – Gasoline Heavy Duty Vehicles
+* Mobile – On-road – Gasoline Light Duty Vehicles
+
+```{r}
+# use grep to find Diesel or Gasoline, Light or Heavy Duty Vehicles in the EI.Sector
+moto.codes <- SCC[grep('On-Road (Diesel|Gasoline) (Heavy|Light) Duty Vehicles', SCC$EI.Sector), "SCC"]
+# we have the `dt.balt` dplyr tbl from Question 3, representing all emissions measurements in Baltimore.
+# Let's use it.
+moto.sum.balt <- dt.balt %>% filter(SCC %in% moto.codes) %>% group_by(year) %>% summarize(emissions=sum(Emissions)) %>% print
+# since we used ggplot for Question 3, let's use the same.
+plot5 <- qplot(year, emissions, data=moto.sum.balt, geom=c('point', 'smooth'))
+suppressWarnings(print(plot5))
+```
 
 ### 6. Compare emissions from motor vehicle sources in Baltimore City with emissions from motor vehicle sources in Los Angeles County, California (fips == "06037"). 
 
 Which city has seen greater changes over time in motor vehicle emissions?
+
+```{r}
+# we already have the aggregate data for Baltimore in moto.sum.balt from Question 5
+# let's perform the same aggregate for LA now
+dt.la <- tbl_df(NEI[NEI$fips == '06037',])
+moto.sum.la <- dt.la %>% filter(SCC %in% moto.codes) %>% group_by(year) %>% summarize(emissions=sum(Emissions))
+# to plot them both on the same chart, let's mutate them and add a column with the city/county aka fipsname
+moto.sum.balt <- mutate(moto.sum.balt, fipsname='Baltimore City')
+moto.sum.la <- mutate(moto.sum.la, fipsname='Los Angeles County')
+# now let's union the two so we can plot them together
+moto.sum.bla <- union(moto.sum.balt, moto.sum.la)
+print(moto.sum.bla)
+plot6 <- qplot(year, emissions, data=moto.sum.bla, color=fipsname, geom=c('point', 'smooth'))
+suppressWarnings(print(plot6))
+```
